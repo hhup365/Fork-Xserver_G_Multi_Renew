@@ -126,3 +126,7 @@ socks5://user:pass@server:port
 - 签到按钮在实例开通/续签后 **48小时** 才会出现
 - 首次使用建议手动触发一次，确认配置正确
 - GitHub Actions 不支持 IPv6，如需访问 IPv6 节点请使用代理
+
+## 🌟 特别鸣谢
+
+在此感谢 [XCQ0607/Xserver_script](https://github.com/XCQ0607/Xserver_script) 项目提供的签到思路。
