@@ -1,14 +1,4 @@
-# Xserver_G_Multi_Renew
-## 前期准备：严格按照以下步骤关闭邮件验证功能
- 1、点击账户
-<img width="1818" height="501" alt="image" src="https://github.com/user-attachments/assets/f774ea20-ba10-4913-b01f-e0107bce9e94" />
-2、点击**查看和编辑注册信息**
-<img width="874" height="546" alt="image" src="https://github.com/user-attachments/assets/c8c332d3-1e81-457b-9328-5e6971c31c42" />
-3、修改**可疑登录期间的身份验证**为**无效的**
-<img width="1694" height="367" alt="image" src="https://github.com/user-attachments/assets/d331a64b-e94f-4663-8530-67e438264302" />
-
-
-# XServer 游戏服务器自动续签
+# XServer 游戏服务器自动续签（随机时间乱序签到版）
 
 自动延长 XServer Game VPS 实例期限，支持多账号、代理和 Telegram 通知。
 
