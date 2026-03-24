@@ -70,7 +70,6 @@ jobs:
         run: |
           if [ -z "$PROXY_URL" ]; then exit 0; fi
           
-          # 下载特定版本的 sing-box (与 ICMP9 项目一致)
           SINGBOX_VER="1.11.0"
           echo "📦 下载 sing-box v${SINGBOX_VER}..."
           wget -q "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-amd64.tar.gz"
@@ -78,14 +77,12 @@ jobs:
           mv "sing-box-${SINGBOX_VER}-linux-amd64/sing-box" ./sing-box
           chmod +x ./sing-box
           
-          # 生成配置
           echo "🔗 解析代理协议..."
           python3 proxy_handler.py
           
           if [ -f config.json ]; then
             echo "✅ 代理配置已生成:"
             cat config.json
-            # 使用 nohup 启动 (与 ICMP9 项目一致)
             nohup ./sing-box run -c config.json > singbox.log 2>&1 &
             sleep 5
             echo "✅ Proxy tunnel started"
@@ -123,3 +120,16 @@ jobs:
             git commit -m "chore: Update status.json for ${{ matrix.account_index }} [skip ci]" || echo "No changes"
             git push
           fi
+
+      # ================= 新增 =================
+      - name: 🕒 Keep Actions Alive (time.txt)
+        if: always()
+        run: |
+          echo "$(date '+%Y-%m-%d %H:%M:%S')" > time.txt
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add time.txt
+          git commit -m "chore: update time.txt to keep actions alive" || echo "No changes"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
