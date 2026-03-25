@@ -50,18 +50,12 @@ function gitCommitPush(commitMsg) {
   }
 }
 
-function getTodayStr() {
-  return new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+function formatTimeUTC8(ts) {
+  return new Date(ts + 8 * 3600000).toISOString().replace('T', ' ').slice(0, 19);
 }
 
-function addDaysStr(dateStr, days) {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
-async function sendTG(statusIcon, statusText, extra, imagePath) {
-  if (muteTg) {
+async function sendTG(statusIcon, statusText, extra, imagePath, force = false) {
+  if (muteTg && !force) {
     console.log(`🔇 屏蔽TG通知 (${statusText}): 未到下次检查时间`);
     return;
   }
@@ -70,7 +64,7 @@ async function sendTG(statusIcon, statusText, extra, imagePath) {
   extra = extra || '';
   imagePath = imagePath || null;
   try {
-    var time = new Date(Date.now() + 8 * 3600000).toISOString().replace('T', ' ').slice(0, 19);
+    var time = formatTimeUTC8(Date.now());
     var text = 'XServer 延期提醒\n' + statusIcon + ' ' + statusText + '\n' + extra + '\n账号: ' + ACC + '\n时间: ' + time;
     if (imagePath && fs.existsSync(imagePath)) {
       var fileData = fs.readFileSync(imagePath);
@@ -94,27 +88,33 @@ async function sendTG(statusIcon, statusText, extra, imagePath) {
 }
 
 function checkScheduling() {
-  const today = getTodayStr();
+  const now = Date.now();
   const s = getAccountStatus();
   
-  if (!s.nextCheckDate) { 
-    console.log('🆕 首次运行，将正常发送 TG 通知'); 
+  let nextTime = s.nextCheckTime;
+  
+  if (!nextTime && s.nextCheckDate) {
+    nextTime = new Date(s.nextCheckDate + 'T00:00:00+08:00').getTime();
+  }
+
+  if (!nextTime) { 
+    console.log('🆕 首次运行或未找到限制时间，将正常发送 TG 通知'); 
     return; 
   }
 
-  if (today < s.nextCheckDate) {
-    muteTg = true; // 只要没到下次时间，不管是定时还是手动运行，都静默TG通知
-    console.log('⏳ 预约 ' + s.nextCheckDate + '，没到下次时间，本次执行将屏蔽所有 TG 通知');
+  if (now < nextTime) {
+    muteTg = true; // 只要没到下次时间，不管是定时还是手动运行，都静默TG通知 (除非 force = true 强行覆盖)
+    console.log('⏳ 预约 ' + formatTimeUTC8(nextTime) + '，没到下次时间，本次执行将屏蔽一般 TG 通知');
 
     if (process.env.GITHUB_EVENT_NAME === 'schedule') {
-      var days = Math.ceil((new Date(s.nextCheckDate) - new Date(today)) / 86400000);
-      console.log('⏳ 定时任务还剩 ' + days + ' 天，秒退');
+      var hoursLeft = ((nextTime - now) / 3600000).toFixed(1);
+      console.log('⏳ 定时任务还剩 ' + hoursLeft + ' 小时，秒退');
       process.exit(0);
     } else {
       console.log('💻 本地/手动触发模式：继续执行');
     }
   } else {
-    console.log('📅 到达预约日期 ' + today + '，将正常发送通知');
+    console.log('📅 到达预约时间 ' + formatTimeUTC8(now) + '，将正常发送通知');
   }
 }
 
@@ -138,14 +138,20 @@ async function parseRemainingMinutes(page) {
   } catch (e) { console.log('⚠️ 解析失败:', e.message); return null; }
 }
 
-function updateNextCheckDate(daysLater, reason) {
-  var next = addDaysStr(getTodayStr(), daysLater);
+// 统一按照精确到"小时"来更新下次检查时间
+function updateNextCheckTime(hoursLater, reason) {
+  const nextTime = Date.now() + hoursLater * 3600000;
+  const nextTimeStr = formatTimeUTC8(nextTime);
+  
   var status = loadStatus();
   if (!status[ACC]) status[ACC] = {};
-  status[ACC].nextCheckDate = next;
+  status[ACC].nextCheckTime = nextTime;
+  status[ACC].nextCheckTimeStr = nextTimeStr; // 写入直观字符串方便 Git 留档和人类阅读
+  delete status[ACC].nextCheckDate; // 清理旧格式
+  
   saveStatus(status);
-  console.log('📅 下次预约: ' + next + '（' + reason + '）');
-  gitCommitPush('[Bot] ' + ACC + ' 下次检查 ' + next);
+  console.log('📅 下次预约: ' + nextTimeStr + '（' + reason + '）');
+  gitCommitPush('[Bot] ' + ACC + ' 下次检查 ' + nextTimeStr);
 }
 
 async function tryRenew(page, beforeMins) {
@@ -175,9 +181,11 @@ async function tryRenew(page, beforeMins) {
     status[ACC].lastSuccess = Date.now();
     saveStatus(status);
     
-    var checkDelay = (RENEW_THRESHOLD === 12) ? 1 : 3; 
-    updateNextCheckDate(checkDelay, '续签成功');
-    await sendTG('✅', '续签成功', timeInfo + `\n下次检查${checkDelay}天后`, 'success.png');
+    // 按小时定下次检查时间：原本的 1天/3天 分别转为 24小时/72小时
+    var checkDelayHours = (RENEW_THRESHOLD === 12) ? 24 : 72; 
+    updateNextCheckTime(checkDelayHours, '续签成功');
+    
+    await sendTG('✅', '续签成功', timeInfo + `\n下次检查${checkDelayHours}小时后`, 'success.png', true);
   } catch (e) {
     console.log('⚠️ 未找到延期按钮');
     await page.screenshot({ path: 'skip.png' });
@@ -245,10 +253,10 @@ async function tryRenew(page, beforeMins) {
     } else {
       var h = totalMins / 60;
       if (h >= RENEW_THRESHOLD) {
-        var skip = Math.max(1, Math.floor((h - RENEW_THRESHOLD) / 24));
-        console.log(`🔭 探测模式: 剩余 ${h.toFixed(1)} 小时，未达到 ${RENEW_THRESHOLD}h 续期阈值 → 预约 ${skip} 天后`);
-        await sendTG('🔭', '探测跳过', `剩余 ${h.toFixed(1)}h，未达到续期阈值(<${RENEW_THRESHOLD}h)，${skip}天后检查`, '3_game_manage.png');
-        updateNextCheckDate(skip, `探测模式跳过${skip}天`);
+        var skipHours = Math.max(1, Math.floor(h - RENEW_THRESHOLD));
+        console.log(`🔭 探测模式: 剩余 ${h.toFixed(1)} 小时，未达到 ${RENEW_THRESHOLD}h 续期阈值 → 预约 ${skipHours} 小时后`);
+        await sendTG('🔭', '探测跳过', `剩余 ${h.toFixed(1)}h，未达到续期阈值(<${RENEW_THRESHOLD}h)，${skipHours}小时后检查`, '3_game_manage.png');
+        updateNextCheckTime(skipHours, `探测模式跳过${skipHours}小时`);
       } else {
         console.log(`🚨 续期模式: 剩余 ${h.toFixed(1)} 小时，满足 < ${RENEW_THRESHOLD}h 规则，立即执行续期！`);
         await tryRenew(page, totalMins);
