@@ -2,7 +2,8 @@ name: XServer Extend (Node.js Matrix)
 
 on:
   schedule:
-    - cron: '0 22 * * *' # 06:00 AM Beijing (UTC+8)
+    # 每天 UTC 时间 01:00 和 13:00 执行 (对应北京时间 09:00 和 21:00)
+    - cron: '0 1,13 * * *'
   workflow_dispatch:
 
 permissions:
@@ -45,7 +46,6 @@ jobs:
       max-parallel: 1
       matrix:
         account_index: ${{ fromJson(needs.setup.outputs.matrix) }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -95,6 +95,8 @@ jobs:
         env:
           ACC: ${{ matrix.account_index == 'SINGLE' && secrets.EML || secrets[format('EML_{0}', matrix.account_index)] }}
           ACC_PWD: ${{ matrix.account_index == 'SINGLE' && secrets.PWD || secrets[format('PWD_{0}', matrix.account_index)] }}
+          # ====== 新增 PLAN 环境变量映射逻辑 ======
+          PLAN: ${{ matrix.account_index == 'SINGLE' && secrets.PLAN || secrets[format('PLAN_{0}', matrix.account_index)] }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_ID: ${{ secrets.TG_ID }}
           PROXY_URL: ${{ secrets.PROXY_URL }}
