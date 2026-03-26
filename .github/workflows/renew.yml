@@ -2,7 +2,7 @@ name: XServer Extend (Node.js Matrix)
 
 on:
   schedule:
-    - cron: '0 1,13 * * *'
+    - cron: '17 1,9,17 * * *'
   workflow_dispatch:
 
 permissions:
@@ -14,8 +14,7 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Generate account list
         id: set-matrix
@@ -42,26 +41,24 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 1   # 如果你想更快，可以改成 3
       matrix:
         account_index: ${{ fromJson(needs.setup.outputs.matrix) }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: main
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
 
       - name: Install Dependencies
         run: |
           npm install
-          npx playwright install --with-deps chrome
+          npx playwright install --with-deps chromium
           sudo apt-get update
           sudo apt-get install -y jq fonts-noto-cjk python3 wget
 
@@ -72,23 +69,17 @@ jobs:
           if [ -z "$PROXY_URL" ]; then exit 0; fi
           
           SINGBOX_VER="1.11.0"
-          echo "📦 下载 sing-box v${SINGBOX_VER}..."
           wget -q "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-amd64.tar.gz"
           tar -xzf "sing-box-${SINGBOX_VER}-linux-amd64.tar.gz"
           mv "sing-box-${SINGBOX_VER}-linux-amd64/sing-box" ./sing-box
           chmod +x ./sing-box
           
-          echo "🔗 解析代理协议..."
           python3 proxy_handler.py
           
           if [ -f config.json ]; then
-            echo "✅ 代理配置已生成:"
-            cat config.json
             nohup ./sing-box run -c config.json > singbox.log 2>&1 &
             sleep 5
-            echo "✅ Proxy tunnel started"
           else
-            echo "❌ 代理配置生成失败"
             exit 1
           fi
 
@@ -125,18 +116,3 @@ jobs:
             git commit -m "chore: Update status.json for ${{ matrix.account_index }} [skip ci]" || echo "No changes"
             git push origin HEAD:main
           fi
-
-      - name: 🕒 Keep Actions Alive (time.txt)
-        if: always()
-        run: |
-          echo "$(date '+%Y-%m-%d %H:%M:%S')" > time.txt
-
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-          git fetch origin main
-          git reset --hard origin/main
-
-          git add time.txt
-          git commit -m "chore: update time.txt to keep actions alive" || echo "No changes"
-          git push origin HEAD:main
