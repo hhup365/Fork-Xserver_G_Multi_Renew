@@ -11,10 +11,10 @@ const PROXY_URL = process.env.PROXY_URL;
 
 // 假设通过环境变量 INDEX 传入当前账号的序号 (如 1, 2) 默认是 1
 const ACCOUNT_INDEX = process.env.INDEX || '1';
-// 动态获取对应账号的 PLAN 环境变量，如 PLAN_1, PLAN_2，未找到则默认 72
-const PLAN = process.env['PLAN_' + ACCOUNT_INDEX] || process.env.PLAN || '72';
-// 根据计划确定续期阈值：36h计划小于12h可续期，72h计划小于24h可续期
-const RENEW_THRESHOLD = (PLAN === '36') ? 12 : 24;
+// 动态获取对应账号的 PLAN 环境变量，未找到则默认 16（即剩余小于等于16小时可续期）
+const PLAN = process.env['PLAN_' + ACCOUNT_INDEX] || process.env.PLAN || '16';
+// 续期阈值直接取 PLAN 的值
+const RENEW_THRESHOLD = parseFloat(PLAN);
 
 const LOGIN_URL = 'https://secure.xserver.ne.jp/xapanel/login/xmgame';
 const STATUS_FILE = 'status.json';
@@ -98,15 +98,15 @@ function checkScheduling() {
   }
 
   if (!nextTime) { 
-    console.log('🆕 首次运行或未找到限制时间，将正常发送 TG 通知'); 
+    console.log('🆕 首次运行或未找到限制时间，将正常执行'); 
     return; 
   }
 
   if (now < nextTime) {
     muteTg = true; // 只要没到下次时间，不管是定时还是手动运行，都静默TG通知 (除非 force = true 强行覆盖)
-    console.log('⏳ 预约 ' + formatTimeUTC8(nextTime) + '，没到下次时间，本次执行将屏蔽一般 TG 通知');
+    console.log('⏳ 预约 ' + formatTimeUTC8(nextTime) + '，没到下次检查时间');
 
-    if (process.env.GITHUB_EVENT_NAME === 'schedule') {
+    if (process.env.GITHUB_EVENT_NAME === 'schedule' || process.env.CRON === 'true') {
       var hoursLeft = ((nextTime - now) / 3600000).toFixed(1);
       console.log('⏳ 定时任务还剩 ' + hoursLeft + ' 小时，秒退');
       process.exit(0);
@@ -114,7 +114,7 @@ function checkScheduling() {
       console.log('💻 本地/手动触发模式：继续执行');
     }
   } else {
-    console.log('📅 到达预约时间 ' + formatTimeUTC8(now) + '，将正常发送通知');
+    console.log('📅 已到达或超过预约时间 ' + formatTimeUTC8(now) + '，正常执行');
   }
 }
 
@@ -150,26 +150,52 @@ function updateNextCheckTime(hoursLater, reason) {
   delete status[ACC].nextCheckDate; // 清理旧格式
   
   saveStatus(status);
-  console.log('📅 下次预约: ' + nextTimeStr + '（' + reason + '）');
+  console.log('📅 写入下次预约: ' + nextTimeStr + '（' + reason + '）');
   gitCommitPush('[Bot] ' + ACC + ' 下次检查 ' + nextTimeStr);
 }
 
 async function tryRenew(page, beforeMins) {
-  try {
-    console.log('🔄 滚动到页面底部...'); await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); await page.waitForTimeout(2000);
-    await page.getByRole('link', { name: '期限を延長する' }).waitFor({ state: 'visible', timeout: 5000 });
-    await page.getByRole('link', { name: '期限を延長する' }).click();
-    await page.waitForLoadState('load');
-    await page.getByRole('button', { name: '確認画面に進む' }).click();
-    await page.waitForLoadState('load');
-    console.log('🖱️ 执行延期...');
-    await page.getByRole('button', { name: '期限を延長する' }).click();
-    await page.waitForLoadState('load');
-    await page.screenshot({ path: '5_before_back.png' });
-    console.log('✅ 延期成功，正在获取新的剩余时间...');
-    await page.getByRole('link', { name: '戻る' }).click();
-    await page.waitForLoadState('load');
-    await page.screenshot({ path: 'success.png' });
+  let success = false;
+  
+  // 增加3次重试机制，每次失败间隔5分钟
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      console.log(`🔄 [第 ${attempt}/3 次尝试] 滚动并查找延期按钮...`); 
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); 
+      await page.waitForTimeout(2000);
+      
+      const btn = page.getByRole('link', { name: '期限を延長する' });
+      await btn.waitFor({ state: 'visible', timeout: 5000 });
+      
+      await btn.click();
+      await page.waitForLoadState('load');
+      await page.getByRole('button', { name: '確認画面に進む' }).click();
+      await page.waitForLoadState('load');
+      console.log('🖱️ 确认执行延期...');
+      await page.getByRole('button', { name: '期限を延長する' }).click();
+      await page.waitForLoadState('load');
+      await page.screenshot({ path: '5_before_back.png' });
+      
+      console.log('✅ 延期点击成功，正在获取新的剩余时间...');
+      await page.getByRole('link', { name: '戻る' }).click();
+      await page.waitForLoadState('load');
+      await page.screenshot({ path: 'success.png' });
+      
+      success = true;
+      break; // 成功则跳出重试循环
+      
+    } catch (e) {
+      console.log(`⚠️ 第 ${attempt} 次未找到按钮或操作失败`);
+      if (attempt < 3) {
+        console.log('⏳ 可能是时间卡点边缘，等待 5 分钟后刷新重试...');
+        await page.waitForTimeout(5 * 60 * 1000); // 等待 5 分钟
+        await page.reload({ waitUntil: 'load' }); // 刷新页面
+      }
+    }
+  }
+
+  // 结算结果
+  if (success) {
     var afterMins = await parseRemainingMinutes(page);
     var beforeH = beforeMins ? (beforeMins / 60).toFixed(1) : '?';
     var afterH = afterMins ? (afterMins / 60).toFixed(1) : '?';
@@ -181,24 +207,26 @@ async function tryRenew(page, beforeMins) {
     status[ACC].lastSuccess = Date.now();
     saveStatus(status);
     
-    // 按小时定下次检查时间：原本的 1天/3天 分别转为 24小时/72小时
-    var checkDelayHours = (RENEW_THRESHOLD === 12) ? 24 : 72; 
-    updateNextCheckTime(checkDelayHours, '续签成功');
+    // 计算下次检查时间: 新剩余时间减去阈值，保底至少1小时后
+    var checkDelayHours = afterH !== '?' ? Math.max(1, afterH - RENEW_THRESHOLD) : 24; 
+    updateNextCheckTime(checkDelayHours, '续签成功计算');
     
-    await sendTG('✅', '续签成功', timeInfo + `\n下次检查${checkDelayHours}小时后`, 'success.png', true);
-  } catch (e) {
-    console.log('⚠️ 未找到延期按钮');
+    // 成功一定强制通知
+    await sendTG('✅', '续签成功', timeInfo + `\n下次检查${checkDelayHours.toFixed(1)}小时后`, 'success.png', true);
+  } else {
+    console.log('❌ 3次尝试均未找到延期按钮');
     await page.screenshot({ path: 'skip.png' });
-    var s = getAccountStatus();
-    if (!s.lastSuccess) await sendTG('🕐', '等待中', '按钮未出现', 'skip.png');
-    else await sendTG('⚠️', '跳过', '未到时间', 'skip.png');
+    
+    // 既然已经是续期时间但由于未知原因没按出来，延迟 1 小时后重新走完整流程
+    updateNextCheckTime(1, '重试失败，延迟1小时重试');
+    await sendTG('⚠️', '续签异常', '已达续签时间但重试3次均未找到按钮，1小时后重试', 'skip.png', true);
   }
 }
 
 (async function main() {
   console.log('==================================================');
-  console.log(`XServer 自动延期 (自适应版) - 账号位: #${ACCOUNT_INDEX}`);
-  console.log(`当前计划配置: PLAN_${ACCOUNT_INDEX}=${PLAN}h (续期阈值: <${RENEW_THRESHOLD}h)`);
+  console.log(`XServer 自动延期 (阈值重构版) - 账号位: #${ACCOUNT_INDEX}`);
+  console.log(`当前配置: PLAN_${ACCOUNT_INDEX}=${PLAN}h (当剩余时间 <= ${RENEW_THRESHOLD}h 时可续期)`);
   console.log('==================================================');
 
   if (!ACC || !ACC_PWD) { console.log('❌ 未找到账号或密码'); process.exit(1); }
@@ -252,21 +280,22 @@ async function tryRenew(page, beforeMins) {
       await tryRenew(page, null);
     } else {
       var h = totalMins / 60;
-      if (h >= RENEW_THRESHOLD) {
-        var skipHours = Math.max(1, Math.floor(h - RENEW_THRESHOLD));
-        console.log(`🔭 探测模式: 剩余 ${h.toFixed(1)} 小时，未达到 ${RENEW_THRESHOLD}h 续期阈值 → 预约 ${skipHours} 小时后`);
-        await sendTG('🔭', '探测跳过', `剩余 ${h.toFixed(1)}h，未达到续期阈值(<${RENEW_THRESHOLD}h)，${skipHours}小时后检查`, '3_game_manage.png');
-        updateNextCheckTime(skipHours, `探测模式跳过${skipHours}小时`);
-      } else {
-        console.log(`🚨 续期模式: 剩余 ${h.toFixed(1)} 小时，满足 < ${RENEW_THRESHOLD}h 规则，立即执行续期！`);
+      if (h <= RENEW_THRESHOLD) {
+        console.log(`🚨 续期模式: 剩余 ${h.toFixed(1)} 小时，满足 <= ${RENEW_THRESHOLD}h 规则，立即执行续期！`);
         await tryRenew(page, totalMins);
+      } else {
+        // 未到时间的探测，计算距离下次达到阈值还差多久
+        var skipHours = Math.max(0.5, h - RENEW_THRESHOLD);
+        console.log(`🔭 探测模式: 剩余 ${h.toFixed(1)} 小时，大于阈值 ${RENEW_THRESHOLD}h → 预约 ${skipHours.toFixed(1)} 小时后检查`);
+        updateNextCheckTime(skipHours, `剩余时间较多，跳过${skipHours.toFixed(1)}小时`);
+        // 按照需求：未到时间的续期不通知，故此处不调用 sendTG
       }
     }
 
   } catch (error) {
     console.log('❌ 流程失败: ' + error.message);
     await page.screenshot({ path: 'failure.png' });
-    await sendTG('❌', '续签失败', error.message, 'failure.png');
+    await sendTG('❌', '脚本运行失败', error.message, 'failure.png', true);
   } finally {
     await context.close();
     await browser.close();
